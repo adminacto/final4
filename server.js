@@ -10,6 +10,8 @@ const { v4: uuidv4 } = require("uuid")
 const path = require("path")
 const mongoose = require("mongoose")
 const { Schema, model } = require("mongoose")
+const fs = require("fs")
+const multer = require("multer")
 
 // Инициализация приложения
 const app = express()
@@ -45,6 +47,105 @@ const authLimiter = rateLimit({
   legacyHeaders: false,
   // Настройка для работы за прокси
   skip: (req) => req.ip === '127.0.0.1' || req.ip === '::1',
+})
+
+// Создать папку avatars, если не существует
+const avatarsDir = path.join(__dirname, "public", "avatars")
+if (!fs.existsSync(avatarsDir)) {
+  fs.mkdirSync(avatarsDir, { recursive: true })
+}
+
+// Multer storage config
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    cb(null, avatarsDir)
+  },
+  filename: function (req, file, cb) {
+    const ext = path.extname(file.originalname)
+    const uniqueName = `${Date.now()}_${Math.round(Math.random() * 1e9)}${ext}`
+    cb(null, uniqueName)
+  },
+})
+const upload = multer({
+  storage,
+  limits: { fileSize: 2 * 1024 * 1024 }, // 2MB
+  fileFilter: (req, file, cb) => {
+    if (["image/jpeg", "image/png", "image/webp"].includes(file.mimetype)) {
+      cb(null, true)
+    } else {
+      cb(new Error("Только изображения (jpg, png, webp)"))
+    }
+  },
+})
+
+// Endpoint для загрузки аватара
+app.post("/api/upload-avatar", authenticateToken, upload.single("avatar"), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: "Файл не загружен" })
+    }
+    const userId = req.user.userId
+    const avatarUrl = `/avatars/${req.file.filename}`
+    await User.findByIdAndUpdate(userId, { avatar: avatarUrl })
+    res.json({ success: true, avatar: avatarUrl })
+  } catch (error) {
+    console.error("upload-avatar error:", error)
+    res.status(500).json({ error: "Ошибка загрузки аватара" })
+  }
+})
+
+// Endpoint для создания группы/канала с аватаром
+app.post("/api/create-group", authenticateToken, upload.single("avatar"), async (req, res) => {
+  try {
+    const userId = req.user.userId
+    const { name, description, type, participants } = req.body
+    if (!name || !type || !["group", "channel"].includes(type)) {
+      return res.status(400).json({ error: "Некорректные данные" })
+    }
+    let avatarUrl = null
+    if (req.file) {
+      avatarUrl = `/avatars/${req.file.filename}`
+    }
+    // Участники: всегда добавлять создателя
+    let members = [userId]
+    if (participants) {
+      try {
+        const parsed = JSON.parse(participants)
+        if (Array.isArray(parsed)) {
+          members = Array.from(new Set([...members, ...parsed]))
+        }
+      } catch {}
+    }
+    // Генерируем уникальный id для группы/канала
+    const chatId = `${type}_${Date.now()}_${Math.round(Math.random() * 1e9)}`
+    const chat = await Chat.create({
+      _id: chatId,
+      name,
+      avatar: avatarUrl,
+      description: description || "",
+      isGroup: true,
+      participants: members,
+      createdAt: new Date(),
+      type,
+      isEncrypted: true,
+      createdBy: userId,
+      theme: "default",
+      isPinned: false,
+      isMuted: false,
+    })
+    // Получить участников для ответа
+    const populatedChat = await Chat.findById(chat._id)
+      .populate("participants", "_id username fullName avatar isOnline isVerified status")
+      .lean()
+    res.json({ success: true, chat: {
+      ...populatedChat,
+      id: populatedChat._id?.toString() || populatedChat._id,
+      participants: populatedChat.participants.filter(p => p !== null),
+    } })
+  } catch (error) {
+    console.error("create-group error:", error)
+    res.status(500).json({ error: "Ошибка создания группы/канала" })
+  }
 })
 
 // Конфигурация
@@ -140,7 +241,32 @@ const decryptMessage = (encrypted) => {
 // Эмодзи для реакций
 const reactionEmojis = ["❤️", "👍", "👎", "😂", "😮", "😢", "😡", "🔥", "👏", "🎉"]
 
+// Создание пользователя-бота при запуске
+const BOT_USERNAME = "@actogram_bot"
+const BOT_ID_KEY = "actogram_bot_id"
+let botUserId = null
 
+async function ensureBotUser() {
+  let bot = await User.findOne({ username: BOT_USERNAME })
+  if (!bot) {
+    bot = await User.create({
+      email: "bot@actogram.app",
+      username: BOT_USERNAME,
+      fullName: "Actogram Bot",
+      bio: "Официальный бот Actogram. Новости и обновления.",
+      password: "bot_password_12345678", // не используется
+      createdAt: new Date(),
+      isVerified: true,
+      isOnline: false,
+      lastSeen: new Date(),
+      avatar: null,
+      status: "online",
+    })
+    console.log("🤖 Actogram Bot создан!")
+  }
+  botUserId = bot._id.toString()
+  return botUserId
+}
 
 // Главная страница
 app.get("/", (req, res) => {
@@ -748,12 +874,17 @@ io.on("connection", async (socket) => {
       let chat = await Chat.findById(chatId)
       if (!chat) {
         console.log(`📝 Создание нового чата: ${chatId}`)
+        
+        // Получить информацию о собеседнике
+        const otherUser = await User.findById(userId).lean()
+        const otherUserName = otherUser ? (otherUser.fullName || otherUser.username) : "Неизвестно"
+        
         // Создать новый чат
         chat = await Chat.create({
           _id: chatId, // Используем строковый ID
-          name: user.fullName || user.username,
-          avatar: user.avatar,
-          description: `Приватный чат с ${user.fullName || user.username}`,
+          name: otherUserName, // Используем имя собеседника
+          avatar: otherUser?.avatar || null,
+          description: `Приватный чат с ${otherUserName}`,
           isGroup: false,
           participants: [user.id, userId],
           createdAt: new Date(),
@@ -764,7 +895,7 @@ io.on("connection", async (socket) => {
           isPinned: false,
           isMuted: false,
         })
-        console.log(`✅ Чат создан: ${chat._id}`)
+        console.log(`✅ Чат создан: ${chat._id} с собеседником: ${otherUserName}`)
       } else {
         console.log(`📋 Чат уже существует: ${chat._id}`)
       }
@@ -850,11 +981,17 @@ io.on("connection", async (socket) => {
           const participantIds = messageData.chatId.replace('private_', '').split('_')
           if (participantIds.length >= 2) {
             console.log(`📝 Попытка создания чата: ${messageData.chatId}`)
+            
+            // Найти собеседника (не текущего пользователя)
+            const otherUserId = participantIds.find(id => id !== user.id)
+            const otherUser = otherUserId ? await User.findById(otherUserId).lean() : null
+            const otherUserName = otherUser ? (otherUser.fullName || otherUser.username) : "Неизвестно"
+            
             chat = await Chat.create({
               _id: messageData.chatId,
-              name: user.fullName || user.username,
-              avatar: user.avatar,
-              description: `Приватный чат`,
+              name: otherUserName, // Используем имя собеседника
+              avatar: otherUser?.avatar || null,
+              description: `Приватный чат с ${otherUserName}`,
               isGroup: false,
               participants: participantIds,
               createdAt: new Date(),
@@ -865,7 +1002,7 @@ io.on("connection", async (socket) => {
               isPinned: false,
               isMuted: false,
             })
-            console.log(`✅ Чат создан автоматически: ${chat._id}`)
+            console.log(`✅ Чат создан автоматически: ${chat._id} с собеседником: ${otherUserName}`)
           }
         }
         
@@ -1223,3 +1360,75 @@ const MessageSchema = new Schema({
 const User = model("User", UserSchema);
 const Chat = model("Chat", ChatSchema);
 const Message = model("Message", MessageSchema);
+
+// Endpoint для отправки новости от бота во все чаты (только для админа)
+app.post("/api/bot-news", authenticateToken, async (req, res) => {
+  try {
+    const { userId, username } = req.user
+    if (username !== "@adminstator") {
+      return res.status(403).json({ error: "Только админ может отправлять новости" })
+    }
+    const { text } = req.body
+    if (!text || typeof text !== "string" || !text.trim()) {
+      return res.status(400).json({ error: "Текст новости обязателен" })
+    }
+    await ensureBotUser()
+    // Найти все приватные чаты бота
+    const botChats = await Chat.find({
+      isGroup: false,
+      type: "private",
+      participants: botUserId,
+    })
+    for (const chat of botChats) {
+      await Message.create({
+        sender: botUserId,
+        chat: chat._id,
+        content: text,
+        timestamp: new Date(),
+        type: "text",
+        isEncrypted: false,
+        readBy: [botUserId],
+        isEdited: false,
+      })
+      // Отправить через Socket.IO
+      io.to(chat._id.toString()).emit("new_message", {
+        id: Date.now() + Math.random(),
+        senderId: botUserId,
+        senderName: "Actogram Bot",
+        chatId: chat._id.toString(),
+        content: text,
+        timestamp: new Date(),
+        type: "text",
+        isEncrypted: false,
+      })
+    }
+    res.json({ success: true, count: botChats.length })
+  } catch (error) {
+    console.error("bot-news error:", error)
+    res.status(500).json({ error: "Ошибка рассылки новости" })
+  }
+})
+
+// Endpoint для бана пользователя (только для админа)
+app.post("/api/ban-user", authenticateToken, async (req, res) => {
+  try {
+    const { username } = req.user
+    if (username !== "@adminstator") {
+      return res.status(403).json({ error: "Только админ может банить" })
+    }
+    const { userId } = req.body
+    if (!userId) return res.status(400).json({ error: "userId обязателен" })
+    await User.findByIdAndUpdate(userId, { status: "banned" })
+    // Отключить пользователя, если он онлайн
+    for (const [socketId, uid] of activeConnections.entries()) {
+      if (uid === userId) {
+        const s = io.sockets.sockets.get(socketId)
+        if (s) s.disconnect(true)
+      }
+    }
+    res.json({ success: true })
+  } catch (error) {
+    console.error("ban-user error:", error)
+    res.status(500).json({ error: "Ошибка бана пользователя" })
+  }
+})
