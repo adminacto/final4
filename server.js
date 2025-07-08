@@ -13,6 +13,7 @@ const { Schema, model } = require("mongoose")
 const fs = require("fs")
 const multer = require("multer")
 
+
 // Инициализация приложения
 const app = express()
 const server = http.createServer(app)
@@ -76,76 +77,6 @@ const upload = multer({
       cb(new Error("Только изображения (jpg, png, webp)"))
     }
   },
-})
-
-// Endpoint для загрузки аватара
-app.post("/api/upload-avatar", authenticateToken, upload.single("avatar"), async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ error: "Файл не загружен" })
-    }
-    const userId = req.user.userId
-    const avatarUrl = `/avatars/${req.file.filename}`
-    await User.findByIdAndUpdate(userId, { avatar: avatarUrl })
-    res.json({ success: true, avatar: avatarUrl })
-  } catch (error) {
-    console.error("upload-avatar error:", error)
-    res.status(500).json({ error: "Ошибка загрузки аватара" })
-  }
-})
-
-// Endpoint для создания группы/канала с аватаром
-app.post("/api/create-group", authenticateToken, upload.single("avatar"), async (req, res) => {
-  try {
-    const userId = req.user.userId
-    const { name, description, type, participants } = req.body
-    if (!name || !type || !["group", "channel"].includes(type)) {
-      return res.status(400).json({ error: "Некорректные данные" })
-    }
-    let avatarUrl = null
-    if (req.file) {
-      avatarUrl = `/avatars/${req.file.filename}`
-    }
-    // Участники: всегда добавлять создателя
-    let members = [userId]
-    if (participants) {
-      try {
-        const parsed = JSON.parse(participants)
-        if (Array.isArray(parsed)) {
-          members = Array.from(new Set([...members, ...parsed]))
-        }
-      } catch {}
-    }
-    // Генерируем уникальный id для группы/канала
-    const chatId = `${type}_${Date.now()}_${Math.round(Math.random() * 1e9)}`
-    const chat = await Chat.create({
-      _id: chatId,
-      name,
-      avatar: avatarUrl,
-      description: description || "",
-      isGroup: true,
-      participants: members,
-      createdAt: new Date(),
-      type,
-      isEncrypted: true,
-      createdBy: userId,
-      theme: "default",
-      isPinned: false,
-      isMuted: false,
-    })
-    // Получить участников для ответа
-    const populatedChat = await Chat.findById(chat._id)
-      .populate("participants", "_id username fullName avatar isOnline isVerified status")
-      .lean()
-    res.json({ success: true, chat: {
-      ...populatedChat,
-      id: populatedChat._id?.toString() || populatedChat._id,
-      participants: populatedChat.participants.filter(p => p !== null),
-    } })
-  } catch (error) {
-    console.error("create-group error:", error)
-    res.status(500).json({ error: "Ошибка создания группы/канала" })
-  }
 })
 
 // Конфигурация
@@ -533,6 +464,76 @@ app.get("/api/health", async (req, res) => {
   } catch (error) {
     console.error("Health check error:", error)
     res.status(500).json({ error: "Ошибка сервера" })
+  }
+})
+
+// Endpoint для загрузки аватара
+app.post("/api/upload-avatar", authenticateToken, upload.single("avatar"), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: "Файл не загружен" })
+    }
+    const userId = req.user.userId
+    const avatarUrl = `/avatars/${req.file.filename}`
+    await User.findByIdAndUpdate(userId, { avatar: avatarUrl })
+    res.json({ success: true, avatar: avatarUrl })
+  } catch (error) {
+    console.error("upload-avatar error:", error)
+    res.status(500).json({ error: "Ошибка загрузки аватара" })
+  }
+})
+
+// Endpoint для создания группы/канала с аватаром
+app.post("/api/create-group", authenticateToken, upload.single("avatar"), async (req, res) => {
+  try {
+    const userId = req.user.userId
+    const { name, description, type, participants } = req.body
+    if (!name || !type || !["group", "channel"].includes(type)) {
+      return res.status(400).json({ error: "Некорректные данные" })
+    }
+    let avatarUrl = null
+    if (req.file) {
+      avatarUrl = `/avatars/${req.file.filename}`
+    }
+    // Участники: всегда добавлять создателя
+    let members = [userId]
+    if (participants) {
+      try {
+        const parsed = JSON.parse(participants)
+        if (Array.isArray(parsed)) {
+          members = Array.from(new Set([...members, ...parsed]))
+        }
+      } catch {}
+    }
+    // Генерируем уникальный id для группы/канала
+    const chatId = `${type}_${Date.now()}_${Math.round(Math.random() * 1e9)}`
+    const chat = await Chat.create({
+      _id: chatId,
+      name,
+      avatar: avatarUrl,
+      description: description || "",
+      isGroup: true,
+      participants: members,
+      createdAt: new Date(),
+      type,
+      isEncrypted: true,
+      createdBy: userId,
+      theme: "default",
+      isPinned: false,
+      isMuted: false,
+    })
+    // Получить участников для ответа
+    const populatedChat = await Chat.findById(chat._id)
+      .populate("participants", "_id username fullName avatar isOnline isVerified status")
+      .lean()
+    res.json({ success: true, chat: {
+      ...populatedChat,
+      id: populatedChat._id?.toString() || populatedChat._id,
+      participants: populatedChat.participants.filter(p => p !== null),
+    } })
+  } catch (error) {
+    console.error("create-group error:", error)
+    res.status(500).json({ error: "Ошибка создания группы/канала" })
   }
 })
 
@@ -1229,7 +1230,7 @@ io.on("connection", async (socket) => {
 server.listen(PORT, () => {
   console.log(`
 🚀 ACTOGRAM Server v3.0 запущен на порту ${PORT}
-📱 Клиент: https://acto-uimuz.vercel.app
+📱 Клиент: https://acto-uimuz.vercel.app  
 🌐 Сервер: https://actogr.onrender.com
 🔐 Безопасность: JWT + Bcrypt + Rate Limiting + E2E Encryption
 ✨ Новые функции: Реакции, улучшенный UI, многоязычность
