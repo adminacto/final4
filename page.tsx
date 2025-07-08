@@ -1276,7 +1276,16 @@ export default function ActogramChat() {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
-                        <h3 className="font-medium truncate">{chat.name}</h3>
+                        {/* Для приватного чата показывай имя собеседника */}
+                        const isPrivate = chat.type === "private"
+                        const otherUser = isPrivate
+                          ? chat.participants.find((u) => u.id !== currentUser?.id)
+                          : null
+                        const chatDisplayName = isPrivate
+                          ? otherUser?.fullName || otherUser?.username || "Неизвестно"
+                          : chat.name
+                        }
+                        <h3 className="font-medium truncate">{chatDisplayName}</h3>
                         {chat.isEncrypted && <Lock className="h-3 w-3 text-green-500" />}
                         {chat.isPinned && <Star className="h-3 w-3 text-yellow-500" />}
                       </div>
