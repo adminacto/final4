@@ -1277,15 +1277,16 @@ export default function ActogramChat() {
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         {/* Для приватного чата показывай имя собеседника */}
-                        const isPrivate = chat.type === "private"
-                        const otherUser = isPrivate
-                          ? chat.participants.find((u) => u.id !== currentUser?.id)
-                          : null
-                        const chatDisplayName = isPrivate
-                          ? otherUser?.fullName || otherUser?.username || "Неизвестно"
-                          : chat.name
-                        }
-                        <h3 className="font-medium truncate">{chatDisplayName}</h3>
+                        {(() => {
+                          const isPrivate = chat.type === "private"
+                          const otherUser = isPrivate
+                            ? chat.participants.find((u) => u.id !== currentUser?.id)
+                            : null
+                          const chatDisplayName = isPrivate
+                            ? otherUser?.fullName || otherUser?.username || "Неизвестно"
+                            : chat.name
+                          return <h3 className="font-medium truncate">{chatDisplayName}</h3>
+                        })()}
                         {chat.isEncrypted && <Lock className="h-3 w-3 text-green-500" />}
                         {chat.isPinned && <Star className="h-3 w-3 text-yellow-500" />}
                       </div>
@@ -1337,14 +1338,39 @@ export default function ActogramChat() {
                     </Button>
                   )}
                   <Avatar className="h-10 w-10">
-                    <AvatarImage src={selectedChat.avatar || "/placeholder.svg"} />
+                    <AvatarImage 
+                      src={
+                        selectedChat.type === "private" 
+                          ? (() => {
+                              const otherUser = selectedChat.participants.find((u) => u.id !== currentUser?.id)
+                              return otherUser?.avatar || selectedChat.avatar || "/placeholder.svg"
+                            })()
+                          : selectedChat.avatar || "/placeholder.svg"
+                      } 
+                    />
                     <AvatarFallback className="bg-gradient-to-br from-blue-500 to-purple-600 text-white">
-                      {selectedChat.isGroup ? <Users className="h-5 w-5" /> : selectedChat.name.charAt(0)}
+                      {selectedChat.isGroup ? (
+                        <Users className="h-5 w-5" />
+                      ) : (
+                        (() => {
+                          const otherUser = selectedChat.participants.find((u) => u.id !== currentUser?.id)
+                          const displayName = otherUser?.fullName || otherUser?.username || selectedChat.name
+                          return displayName.charAt(0)
+                        })()
+                      )}
                     </AvatarFallback>
                   </Avatar>
                   <div>
                     <div className="flex items-center gap-2">
-                      <h2 className="font-semibold">{selectedChat.name}</h2>
+                      <h2 className="font-semibold">
+                        {selectedChat.type === "private" 
+                          ? (() => {
+                              const otherUser = selectedChat.participants.find((u) => u.id !== currentUser?.id)
+                              return otherUser?.fullName || otherUser?.username || selectedChat.name
+                            })()
+                          : selectedChat.name
+                        }
+                      </h2>
                       {selectedChat.isEncrypted && <Lock className="h-4 w-4 text-green-500" />}
                     </div>
                     <p className="text-sm text-gray-500">
